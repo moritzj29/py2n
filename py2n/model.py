@@ -5,6 +5,7 @@ import aiohttp
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 
 @dataclass
@@ -15,6 +16,7 @@ class Py2NConnectionData:
     username: str | None = None
     password: str | None = None
     auth: aiohttp.BasicAuth | None = None
+    auth_method: Literal["basic", "digest"] = "basic"
     protocol: str | None = "http"
     ssl_verify: bool = False
     unprivileged: bool | None = False
@@ -25,9 +27,14 @@ class Py2NConnectionData:
             if self.password is None:
                 raise ValueError("Supply both username and password")
 
-            object.__setattr__(
-                self, "auth", aiohttp.BasicAuth(self.username, self.password)
-            )
+            if self.auth_method == "basic":
+                object.__setattr__(
+                    self, "auth", aiohttp.BasicAuth(self.username, self.password)
+                )
+            elif self.auth_method == "digest":
+                object.__setattr__(self, "auth", None)
+            else:
+                raise ValueError("Unsupported auth_method")
 
 
 @dataclass

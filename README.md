@@ -26,7 +26,7 @@ Required HTTP API services for the library to work:
 For each service
 - enabled needs to be ticked
 - connection type needs to match protocol (unsecure (TCP) -> HTTP, secure (TLS) -> HTTPS); unsecure allows both HTTP and HTTPS connections
-- authentication needs to be set to Basic Auth
+- authentication can be set to either Basic Auth or Digest Auth (no mixing), the corresponding flag needs to be set when the connection is established
 
 Account with following user privileges (at least monitoring) needs to enabled:
 - System
@@ -57,6 +57,7 @@ async def run(websession):
             host="192.168.1.69",
             username="username",
             password="password",
+            # auth_method="digest", # default: "basic"
             # protocol="https", # default: "http"
             # ssl_verify=True, # default: False
         ),
@@ -67,4 +68,6 @@ async def run(websession):
 asyncio.run(main())
 ```
 
+`auth_method` controls HTTP auth scheme and supports `"basic"` (default) and `"digest"`. 2N recommends Digest Auth, especially if using plain HTTP instead of HTTPS.
 `ssl_verify` controls TLS certificate verification for HTTPS connections. Requires the device to present a trusted server certificate (e.g. Let's Encrypt).
+

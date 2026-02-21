@@ -4,8 +4,12 @@ from __future__ import annotations
 import logging
 import aiohttp
 import asyncio
+import hashlib
+import secrets
+import re
 
 from typing import Any, List
+from urllib.parse import urlsplit
 
 from .const import (
     HTTP_CALL_TIMEOUT,
@@ -39,6 +43,113 @@ from .exceptions import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+_DIGEST_PARAM_RE = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|([^,]+))')
+
+
+def _parse_digest_challenge(challenge: str) -> dict[str, str]:
+    if not challenge:
+        return {}
+    challenge = challenge.strip()
+    if challenge.lower().startswith("digest "):
+        challenge = challenge[7:]
+    parsed: dict[str, str] = {}
+    for key, quoted_value, plain_value in _DIGEST_PARAM_RE.findall(challenge):
+        parsed[key.lower()] = (quoted_value or plain_value).strip()
+    return parsed
+
+
+def _get_digest_hash(algorithm: str):
+    algorithm_map = {
+        "md5": hashlib.md5,
+        "sha-256": hashlib.sha256,
+    }
+    return algorithm_map.get(algorithm.lower())
+
+
+def _build_digest_authorization(
+    method: str,
+    url: str,
+    username: str,
+    password: str,
+    challenge_header: str,
+) -> str | None:
+    challenge = _parse_digest_challenge(challenge_header)
+    realm = challenge.get("realm")
+    nonce = challenge.get("nonce")
+    if not realm or not nonce:
+        return None
+
+    algorithm = challenge.get("algorithm", "MD5")
+    hash_fn = _get_digest_hash(algorithm)
+    if hash_fn is None:
+        return None
+
+    uri_parts = urlsplit(url)
+    digest_uri = uri_parts.path or "/"
+    if uri_parts.query:
+        digest_uri = f"{digest_uri}?{uri_parts.query}"
+
+    qop = challenge.get("qop")
+    if qop:
+        qop_values = [value.strip() for value in qop.split(",")]
+        qop = "auth" if "auth" in qop_values else qop_values[0]
+
+    cnonce = secrets.token_hex(8)
+    nc = "00000001"
+    ha1 = hash_fn(f"{username}:{realm}:{password}".encode()).hexdigest()
+    ha2 = hash_fn(f"{method.upper()}:{digest_uri}".encode()).hexdigest()
+    if qop:
+        response = hash_fn(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}".encode()).hexdigest()
+    else:
+        response = hash_fn(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+
+    auth_fields = [
+        f'username="{username}"',
+        f'realm="{realm}"',
+        f'nonce="{nonce}"',
+        f'uri="{digest_uri}"',
+        f'response="{response}"',
+    ]
+    if "opaque" in challenge:
+        auth_fields.append(f'opaque="{challenge["opaque"]}"')
+    auth_fields.append(f'algorithm={algorithm}')
+    if qop:
+        auth_fields.extend([f"qop={qop}", f"nc={nc}", f'cnonce="{cnonce}"'])
+    return "Digest " + ", ".join(auth_fields)
+
+
+async def _request_with_optional_digest_auth(
+    aiohttp_session: aiohttp.ClientSession,
+    options: Py2NConnectionData,
+    method: str,
+    url: str,
+    request_kwargs: dict[str, Any],
+) -> aiohttp.ClientResponse:
+    response = await aiohttp_session.request(method, url, **request_kwargs)
+    if options.auth_method != "digest":
+        return response
+
+    if response.status != 401:
+        return response
+
+    if not options.username or options.password is None:
+        return response
+
+    challenge_header = response.headers.get("WWW-Authenticate", "")
+    authorization = _build_digest_authorization(
+        method, url, options.username, options.password, challenge_header
+    )
+    if not authorization:
+        return response
+
+    response.release()
+    retry_kwargs = dict(request_kwargs)
+    headers = dict(retry_kwargs.get("headers") or {})
+    headers["Authorization"] = authorization
+    retry_kwargs["headers"] = headers
+    return await aiohttp_session.request(method, url, **retry_kwargs)
 
 
 async def get_info(
@@ -314,15 +425,18 @@ async def api_request(
     request_id = f"{method.upper()} {url}"
     request_kwargs = {
         "timeout": timeout,
-        "auth": options.auth,
         "data": data,
         "json": json,
     }
+    if options.auth is not None:
+        request_kwargs["auth"] = options.auth
     if (options.protocol or "").lower() == "https":
         request_kwargs["ssl"] = options.ssl_verify
 
     try:
-        response = await aiohttp_session.request(method, url, **request_kwargs)
+        response = await _request_with_optional_digest_auth(
+            aiohttp_session, options, method, url, request_kwargs
+        )
         if response.content_type != CONTENT_TYPE:
             _LOGGER.debug("%s failed: invalid content type: %s", request_id, response.content_type)
             raise DeviceUnsupportedError(f"invalid content type: {response.content_type}")
@@ -341,9 +455,10 @@ async def api_request(
     if not result["success"]:
         _LOGGER.debug("%s failed: api unsuccessful: %r", request_id, result)
         code = result["error"]["code"]
+        has_credentials = options.username is not None and options.password is not None
         try:
             error = ApiError(code)
-            if error == ApiError.INSUFFICIENT_PRIVILEGES and not options.auth:
+            if error == ApiError.INSUFFICIENT_PRIVILEGES and not has_credentials:
                 error = ApiError.AUTHORIZATION_REQUIRED
 
             err = DeviceApiError(error)
