@@ -311,6 +311,7 @@ async def api_request(
         endpoint="api/"+endpoint
 
     url=f"{options.protocol}://{options.host}/{endpoint}"
+    request_id = f"{method.upper()} {url}"
     request_kwargs = {
         "timeout": timeout,
         "auth": options.auth,
@@ -323,21 +324,22 @@ async def api_request(
     try:
         response = await aiohttp_session.request(method, url, **request_kwargs)
         if response.content_type != CONTENT_TYPE:
+            _LOGGER.debug("%s failed: invalid content type: %s", request_id, response.content_type)
             raise DeviceUnsupportedError(f"invalid content type: {response.content_type}")
 
         result: dict[str, Any] = await response.json()
     except (asyncio.exceptions.TimeoutError, aiohttp.ClientConnectionError) as err:
         error = DeviceConnectionError(err)
-        _LOGGER.debug("host %s: connect error: %r", options.host, error)
+        _LOGGER.debug("%s failed: connect error: %r", request_id, error)
         raise error from err
 
     if "success" not in result:
         error = DeviceUnsupportedError("response malformed")
-        _LOGGER.debug("host %s: api error: %r", options.host, error)
+        _LOGGER.debug("%s failed: api error: %r", request_id, error)
         raise error
 
     if not result["success"]:
-        _LOGGER.debug("host %s: api unsuccessful: %r", options.host, result)
+        _LOGGER.debug("%s failed: api unsuccessful: %r", request_id, result)
         code = result["error"]["code"]
         try:
             error = ApiError(code)
@@ -348,7 +350,7 @@ async def api_request(
         except ValueError:
             err = DeviceUnsupportedError("invalid error code")
 
-        _LOGGER.debug("host %s: api error: %r", options.host, err)
+        _LOGGER.debug("%s failed: api error: %r", request_id, err)
         raise err
 
     if "result" in result:
