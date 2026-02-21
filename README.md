@@ -16,6 +16,25 @@ Asynchronous library to control [2N Telekomunikace® devices](https://www.2n.com
 pip install py2n
 ```
 
+## Configuration of 2N device
+Required HTTP API services for the library to work:
+- System API
+- Switch API
+- I/O API
+- Logging API
+
+For each service
+- enabled needs to be ticked
+- connection type needs to match protocol (unsecure (TCP) -> HTTP, secure (TLS) -> HTTPS); unsecure allows both HTTP and HTTPS connections
+- authentication needs to be set to Basic Auth
+
+Account with following user privileges (at least monitoring) needs to enabled:
+- System
+- Inputs and Outputs
+- Switches
+
+Since Basic Auth transmits credentials in plain text, it is highly recommended to use HTTPS protocol (even with default self-signed certificates).
+
 ## Example
 
 ```python
