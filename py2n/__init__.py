@@ -32,8 +32,7 @@ from .utils import (
     get_dir_template,
     query_dir,
     update_dir,
-    api_request,
-    clear_digest_auth_cache_for_session
+    api_request
     )
 
 _LOGGER = logging.getLogger(__name__)
@@ -254,7 +253,6 @@ class Py2NDevice:
         if not self.initialized:
             raise NotInitialized
 
-        clear_digest_auth_cache_for_session(self.aiohttp_session)
         await self.aiohttp_session.close()
 
     @property

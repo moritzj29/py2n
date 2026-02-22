@@ -5,7 +5,7 @@ import aiohttp
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Py2NConnectionData:
     username: str | None = None
     password: str | None = None
     auth: aiohttp.BasicAuth | None = None
+    digest_auth_middleware: Any | None = None
     auth_method: Literal["basic", "digest"] = "basic"
     protocol: str | None = "http"
     ssl_verify: bool = False
@@ -31,8 +32,16 @@ class Py2NConnectionData:
                 object.__setattr__(
                     self, "auth", aiohttp.BasicAuth(self.username, self.password)
                 )
+                object.__setattr__(self, "digest_auth_middleware", None)
             elif self.auth_method == "digest":
                 object.__setattr__(self, "auth", None)
+                if not hasattr(aiohttp, "DigestAuthMiddleware"):
+                    raise ValueError("Digest auth requires aiohttp with DigestAuthMiddleware")
+                object.__setattr__(
+                    self,
+                    "digest_auth_middleware",
+                    aiohttp.DigestAuthMiddleware(self.username, self.password),
+                )
             else:
                 raise ValueError("Unsupported auth_method")
 
